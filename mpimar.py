@@ -39,7 +39,7 @@ class MapReduceJob(object):
         elif self.isMapper():
             self.data_.append(obj)
         else:
-            self.data_.append(obj)
+            self.reducer_file.write(str(obj[0])+" "+str(obj[1])+"\n")
 
     def master(self):
         self.distribute()
@@ -85,12 +85,17 @@ class MapReduceJob(object):
             fname = self.temp_dir+"/"+self.getID()+"mr_"+rkey+".txt"
             files[rkey] = fname
             f = open(fname,"a")
-            f.write(key+" "+str(row[1])+"\n")
+            f.write(str(key)+" "+str(row[1])+"\n")
             f.close()
         mpi.world.send(0,self.MAPOUTTAG,files)
         
     def reducer(self):
         files = mpi.world.recv(0,self.REDINTAG)
+        
+        #output file
+        fname_out = self.temp_dir+"/"+self.getID()+"_red.txt"
+        self.reducer_file = open(fname_out,"w")
+
         fobjs = []
         for file in files:
             fobjs.append(open(file,"r"))
@@ -135,13 +140,8 @@ class MapReduceJob(object):
         if len(vals) != 0:
             self.reduce((key_prev,vals))
 
-        #output file
-        fname = self.temp_dir+"/"+self.getID()+"_red.txt"
-        f = open(fname,"w")
-        for row in self.data_:
-            f.write(row[0]+" "+str(row[1])+"\n")
-        f.close()
-        mpi.world.send(0,self.REDOUTTAG,fname)
+        self.reducer_file.close()
+        mpi.world.send(0,self.REDOUTTAG,fname_out)
 
     def start(self):
         if self.isMaster():
