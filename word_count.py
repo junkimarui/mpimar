@@ -5,7 +5,7 @@ from mpimar import MapReduceJob
 
 class WordCountJob(MapReduceJob):
     def __init__ (self,mapper_num,reducer_num,input_file,out_file):
-        MapReduceJob.__init__(self,{"name":"wordcount","temp_dir":"/home/marui/python/tmp","mapper":mapper_num,"reducer":reducer_num,"out_file":out_file})
+        MapReduceJob.__init__(self,{"name":"wordcount","temp_dir":"/tmp","mapper":mapper_num,"reducer":reducer_num,"out_file":out_file})
         self.input_files = input_file.split(",")
 
     def distribute(self):

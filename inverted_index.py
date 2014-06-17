@@ -1,11 +1,12 @@
 #!/usr/bin/env python
 import sys
 import codecs
+import os
 from mpimar import MapReduceJob
 
 class InvertedIndexJob(MapReduceJob):
     def __init__ (self,mapper_num,reducer_num,input_file,out_file):
-        MapReduceJob.__init__(self,{"name":"inverted_index","temp_dir":"/home/marui/python/tmp","mapper":mapper_num,"reducer":reducer_num,"out_file":out_file})
+        MapReduceJob.__init__(self,{"name":"inverted_index","temp_dir":"/tmp","mapper":mapper_num,"reducer":reducer_num,"out_file":out_file})
         self.input_files = input_file.split(",")
         self.tmp = {}
 
