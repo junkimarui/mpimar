@@ -19,13 +19,15 @@ python run.py 5 3 word_count.py data/split.aa,data/split.ab,data/split.ac,data/s
 or
 ```
 python run.py 5 3 inverted_index.py data/split.aa,data/split.ab,data/split.ac,data/split.ad,data/split.ae,data/split.af,data/split.ag,data/split.ah,data/split.ai,data/split.aj out.txt
-```
+```  
+And you could use --hostfile [host file]. Just add options of `mpirun` to L15 of run.py.
 
 Development Environment
 -----------
 OS: Ubuntu 14.04  
 CPU: Xeon E5-2650 v2  
 Python version: 2.7.6
+MPI version: Open MPI 1.6.5
 
 COPYRIGHT
 -----------

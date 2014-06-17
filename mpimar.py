@@ -20,14 +20,15 @@ class MapReduceJob(object):
         self.MAPFILETAG = 6
         self.REDFILEREQTAG = 7
         self.REDFILETAG = 8
+        self.FINISHTAG = 9
 
         self.mapper_num = args["mapper"]
         self.reducer_num = args["reducer"]
         self.name = args["name"] if args.has_key("name") else "job"
         self.temp_dir = args["temp_dir"] if args.has_key("temp_dir") else "/tmp"
         self.out_file = args["out_file"] if args.has_key("out_file") else self.name+".txt"
-        self.emit_idx = 0
-        self.data_ = []
+        self.emit_idx = 0 #for master
+        self.data_ = [] #for mapper
 
     #abstract methods
     def distribute(self): print('implement distribute method')
@@ -96,6 +97,12 @@ class MapReduceJob(object):
         #shut down reducer
         for reducer in self.reducers():
             mpi.world.send(reducer,self.REDFILEREQTAG,"")
+        #wait for mappers and reducers
+        msgs = []
+        for child in self.mappers()+self.reducers():
+            msgs.extend(mpi.world.recv(child,self.FINISHTAG))
+        for msg in msgs:
+            print msg
 
     def getHashKey(self,key): return hash(key) % self.reducer_num
         
@@ -122,6 +129,7 @@ class MapReduceJob(object):
             f = codecs.open(fname,"a","utf_8")
             f.write(str(key)+u" "+str(row[1])+"\n")
             f.close()
+        self.data_ = [] #free memory
         mpi.world.send(0,self.MAPOUTTAG,files)
         msg = mpi.world.recv(0,self.MAPFILEREQTAG)
         while msg != "":
@@ -132,12 +140,14 @@ class MapReduceJob(object):
             content = ""
             msg = mpi.world.recv(0,self.MAPFILEREQTAG)
         #delete temporary files
+        msgs = []
         for fname in files.values():
             if os.path.exists(fname):
                 try:
                     os.remove(fname)
                 except:
-                    print fname," might not be deleted(map)"
+                    msgs.append(fname+" might not be deleted(map)")
+        mpi.world.send(0,self.FINISHTAG,msgs)
         
     def reducer(self):
         #create directory if it doesn't exists
@@ -215,12 +225,20 @@ class MapReduceJob(object):
             content = codecs.open(fname_out,"r","utf_8").read()
             mpi.world.send(0,self.REDFILETAG,content)
             msg = mpi.world.recv(0,self.REDFILEREQTAG)
+        #delete files
+        msgs = []
         for fname in files.values():
            if os.path.exists(fname):
                try:
                    os.remove(fname)
                except:
-                   print fname," might not be deleted"
+                   msgs.append(fname+" might not be deleted(reduce)")
+        if os.path.exists(fname_out):
+            try:
+                os.remove(fname_out)
+            except:
+                msgs.append(fname_out+" might not be deleted(reduce)")
+        mpi.world.send(0,self.FINISHTAG,msgs)
 
     def start(self):
         if self.isMaster():
