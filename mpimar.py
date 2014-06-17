@@ -37,7 +37,8 @@ class MapReduceJob(object):
 
     #utility methods
     def isMaster(self): return mpi.world.rank == 0
-    def isMapper(self): return mpi.world.rank > 0 and mpi.world.rank <= self.mapper_num
+    def isMapper(self): return mpi.world.rank in self.mappers()
+    def isReducer(self): return mpi.world.rank in self.reducers()
     def mappers(self): return range(1,self.mapper_num+1)
     def reducers(self): return range(self.mapper_num + 1,mpi.size)
     def getID(self): return self.name + "_" + str(mpi.world.rank)
