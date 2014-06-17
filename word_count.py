@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys
+import codecs
 from mpimar import MapReduceJob
 
 class WordCountJob(MapReduceJob):
@@ -9,7 +10,7 @@ class WordCountJob(MapReduceJob):
 
     def distribute(self):
         for input_file in self.input_files:
-            for line in open(input_file,'r'):
+            for line in codecs.open(input_file,'r','utf_8'):
                 line = line.rstrip()
                 self.emit(line)
 
@@ -25,7 +26,9 @@ class WordCountJob(MapReduceJob):
         for val in vals:
             sum += int(val)
         self.emit((key,sum))
-        
+
+reload(sys)
+sys.setdefaultencoding('utf-8')        
 argv = sys.argv
 if len(argv) < 4:
     print "Usage: mpirun -np [number of process] python word_count.py [mapper num] [reducer num] [filename] [outfile]"

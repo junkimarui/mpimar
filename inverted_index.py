@@ -1,5 +1,6 @@
 #!/usr/bin/env python
 import sys
+import codecs
 from mpimar import MapReduceJob
 
 class InvertedIndexJob(MapReduceJob):
@@ -10,7 +11,7 @@ class InvertedIndexJob(MapReduceJob):
 
     def distribute(self):
         for input_file in self.input_files:
-            for line in open(input_file,'r'):
+            for line in codecs.open(input_file,'r',"utf_8"):
                 line = line.rstrip()
                 self.emit((input_file,line))
         
@@ -34,6 +35,8 @@ class InvertedIndexJob(MapReduceJob):
             vals.append(filename+" "+str(tf[filename]))
         self.emit((word," ".join(vals)))
 
+reload(sys)
+sys.setdefaultencoding('utf-8')
 argv = sys.argv
 if len(argv) < 4:
     print "Usage: mpirun -np [number of process] python %s [mapper num] [reducer num] [file names] [out_file]" % argv[0]
