@@ -2,6 +2,7 @@
 import sys
 import codecs
 import os
+import json
 from mpimar import MapReduceJob
 
 class InvertedIndexJob(MapReduceJob):
@@ -38,11 +39,17 @@ class InvertedIndexJob(MapReduceJob):
 reload(sys)
 sys.setdefaultencoding('utf-8')
 argv = sys.argv
-if len(argv) < 4:
+if len(argv) < 5:
     print "Usage: mpirun -np [number of process] python %s [mapper num] [reducer num] [file names] [out_file]" % argv[0]
     quit()
-if len(argv) > 4:
-    job = InvertedIndexJob(int(argv[1]),int(argv[2]),argv[3],argv[4])
-else:
-    job = InvertedIndexJob(int(argv[1]),int(argv[2]),argv[3])
+job = InvertedIndexJob(int(argv[1]),int(argv[2]),argv[3],argv[4]+".json")
 job.start()
+
+if job.isMaster():
+    #convert from json
+    fout = codecs.open(argv[4],"w","utf_8")
+    for line in open(argv[4]+".json","r"):
+        obj = json.loads(line.rstrip())
+        fout.write(obj[0]+" "+obj[1]+"\n")
+    #delete json file
+    os.remove(argv[4]+".json")
