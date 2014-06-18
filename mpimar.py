@@ -7,6 +7,7 @@ mpimar (MPI Map Reduce Library), pronounced as /empima:r/
 import boost.mpi as mpi
 import os
 import os.path
+import glob
 import json
 
 class MapReduceJob(object):
@@ -126,10 +127,14 @@ class MapReduceJob(object):
         #map step
         for line in open(fname_in,"r"):
             self.map(json.loads(line.rstrip()))
+        #delete temporary files if they exist
+        tmpfiles = glob.glob(self.temp_dir+"/"+self.getID()+"mr_*")
+        for f in tmpfiles:
+            os.remove(f)
         #shuffle and sort
         files = {}
         for row in sorted(self.data_):
-            key = row[0]
+            key = row.keys()[0]
             rkey = str(self.getHashKey(key))
             fname = self.temp_dir+"/"+self.getID()+"mr_"+rkey+".txt"
             files[rkey] = fname
@@ -207,11 +212,12 @@ class MapReduceJob(object):
             kmin = ""
             vmin = ""
             for fobj in fobjs:
-                keyval = lines[fobj]
-                if kmin == "" or keyval[0] < kmin:
-                    kmin = keyval[0]
+                row = lines[fobj]
+                key = row.keys()[0]
+                if kmin == "" or key < kmin:
+                    kmin = key
                     fmin = fobj
-                    vmin = keyval[1]
+                    vmin = row[key]
             #gathers values according as keys
             if key_prev == kmin:
                 vals.append(vmin)
