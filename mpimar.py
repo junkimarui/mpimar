@@ -134,7 +134,7 @@ class MapReduceJob(object):
         #shuffle and sort
         files = {}
         for row in sorted(self.data_):
-            key = row.keys()[0]
+            key = row[0]
             rkey = str(self.getHashKey(key))
             fname = self.temp_dir+"/"+self.getID()+"mr_"+rkey+".txt"
             files[rkey] = fname
@@ -213,11 +213,10 @@ class MapReduceJob(object):
             vmin = ""
             for fobj in fobjs:
                 row = lines[fobj]
-                key = row.keys()[0]
-                if kmin == "" or key < kmin:
-                    kmin = key
+                if kmin == "" or row[0] < kmin:
+                    kmin = row[0]
                     fmin = fobj
-                    vmin = row[key]
+                    vmin = row[1]
             #gathers values according as keys
             if key_prev == kmin:
                 vals.append(vmin)

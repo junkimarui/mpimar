@@ -19,7 +19,7 @@ class WordCountJob(MapReduceJob):
     def map(self,line):
         words = line.split(' ')
         for word in words:
-            self.emit({word:1})
+            self.emit((word,1))
 
     def reduce(self,keyvals):
         key = keyvals[0]
@@ -27,7 +27,7 @@ class WordCountJob(MapReduceJob):
         sum = 0
         for val in vals:
             sum += int(val)
-        self.emit({key:sum})
+        self.emit((key,sum))
 
 reload(sys)
 sys.setdefaultencoding('utf-8')        
@@ -43,6 +43,6 @@ if job.isMaster():
     fout = codecs.open(argv[4],"w","utf_8")
     for line in open(argv[4]+".json","r"):
         obj = json.loads(line.rstrip())
-        fout.write(obj.keys()[0]+" "+str(obj.values()[0])+"\n")
+        fout.write(obj[0]+" "+str(obj[1])+"\n")
     #delete json file
     os.remove(argv[4]+".json")

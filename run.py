@@ -17,14 +17,16 @@ total_num = mapper_num + reducer_num + 1
 cwd = os.getcwd()
 programs = ["mpimar.py",job]
 for line in open(host_file,"r"):
+    line = line.rstrip()
     row = line.split(" ")
     host = row[0]
     if host == "localhost": continue
     if host == "": continue
+    #create directory
+    cmd = "ssh %s mkdir %s" % (host,cwd)
+    print cmd
+    subprocess.call(cmd,shell=True)
     for program in programs:
-        cmd = "ssh %s mkdir %s" % (host,cwd)
-        print cmd
-        subprocess.call(cmd,shell=True)
         cmd = "scp %s/%s %s:%s/" %(cwd,program,host,cwd)
         print cmd
         subprocess.call(cmd,shell=True)

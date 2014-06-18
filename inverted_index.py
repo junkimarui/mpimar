@@ -20,7 +20,7 @@ class InvertedIndexJob(MapReduceJob):
         file_name = tpl[0]
         words = tpl[1].split(' ')
         for word in words:
-            self.emit({word:file_name})
+            self.emit((word,file_name))
 
     def reduce(self,keyvals):
         word = keyvals[0]
@@ -31,7 +31,7 @@ class InvertedIndexJob(MapReduceJob):
                 tf[filename] += 1
             else:
                 tf[filename] = 1
-        self.emit({word:tf})
+        self.emit((word,tf))
 
 reload(sys)
 sys.setdefaultencoding('utf-8')
@@ -48,10 +48,9 @@ if job.isMaster():
     for line in open(argv[4]+".json","r"):
         obj = json.loads(line.rstrip())
         tfs = []
-        key = obj.keys()[0]
-        for fname in obj[key].keys():
-            tfs.append(fname+" "+str(obj[key][fname]))
-        fout.write(key+" "+" ".join(tfs)+"\n")
+        for fname in obj[1].keys():
+            tfs.append(fname+" "+str(obj[1][fname]))
+        fout.write(obj[0]+" "+" ".join(tfs)+"\n")
     #delete json file
     os.remove(argv[4]+".json")
 
