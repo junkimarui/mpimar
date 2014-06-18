@@ -11,6 +11,7 @@ Usage
 `mpimar.py` is a library source. Following sample programs are available.
 * word_count.py
 * inverted_index.py
+* sometimes_fail_job.py
 
 To run sample programs,  
 ```
