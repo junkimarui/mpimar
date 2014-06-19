@@ -23,7 +23,7 @@ for line in open(host_file,"r"):
     if host == "localhost": continue
     if host == "": continue
     #create directory
-    cmd = "ssh %s mkdir %s" % (host,cwd)
+    cmd = "ssh %s mkdir -p %s" % (host,cwd)
     print cmd
     subprocess.call(cmd,shell=True)
     for program in programs:
