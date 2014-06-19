@@ -14,7 +14,7 @@ class InvertedIndexJob(MapReduceJob):
                                "mapper":mapper_num,
                                "reducer":reducer_num,
                                "out_file":out_file,
-                               "allow_error_num":10})
+                               "allow_error_num":15})
         self.input_files = input_file.split(",")
 
     def distribute(self):
