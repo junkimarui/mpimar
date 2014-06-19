@@ -9,6 +9,7 @@ import os
 import os.path
 import glob
 import json
+import random
 
 class MapReduceJob(object):
     __author__ = "Junki Marui"
@@ -34,6 +35,11 @@ class MapReduceJob(object):
         self.allow_error_num = args["allow_error_num"] if args.has_key("allow_error_num") else 0
         self.error_ = []
         self.emit_idx = 0 #for master
+        childarray = range(1,mpi.size)
+        random.seed(1341) #to generate the same random variables
+        random.shuffle(childarray)
+        self.mapper_array = childarray[:self.mapper_num]
+        self.reducer_array = childarray[self.mapper_num:]
 
     #abstract methods
     def distribute(self): print('implement distribute method')
@@ -44,14 +50,14 @@ class MapReduceJob(object):
     def isMaster(self): return mpi.world.rank == 0
     def isMapper(self): return mpi.world.rank in self.mappers()
     def isReducer(self): return mpi.world.rank in self.reducers()
-    def mappers(self): return range(1,self.mapper_num+1)
-    def reducers(self): return range(self.mapper_num + 1,mpi.size)
+    def mappers(self): return self.mapper_array
+    def reducers(self): return self.reducer_array
     def getID(self): return self.name + "_" + str(mpi.world.rank)
     def getReducerFromKey(self,key): return self.reducers()[hash(key) % self.reducer_num]
     def emit(self,obj):
         if self.isMaster():
+            mpi.world.send(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj))
             self.emit_idx = (self.emit_idx + 1) % self.mapper_num
-            mpi.world.send(self.emit_idx+1,self.MAPINTAG,json.dumps(obj))
         elif self.isMapper():
             self.shuffled_files[str(self.getReducerFromKey(obj[0]))].write(json.dumps(obj)+"\n")
         else:
@@ -70,22 +76,25 @@ class MapReduceJob(object):
         
     def master(self):
         self.distribute()
+        print "distributed"
         #tells mappers to finish receiving data
         for mapper in self.mappers():
             mpi.world.send(mapper,self.MAPINTAG,"EOF")
         #receives file names from mappers
         files = {}
+        print "receiving"
         for mapper in self.mappers():
             f = mpi.world.recv(mapper,self.MAPOUTTAG)
             for rkey in f.keys():
                 if files.has_key(rkey):
                     files[rkey][str(mapper)] = f[rkey]
                 else:
-                    files[rkey] = {str(mapper):f[rkey]}                
+                    files[rkey] = {str(mapper):f[rkey]}
+        print "sending"
         #sends file names to reducers
         for rkey in files.keys():
             mpi.world.send(int(rkey), self.REDINTAG, files[rkey])
-
+        print "requesting"
         #receives file request from reducers
         for reducer in self.reducers():
             fnames = mpi.world.recv(reducer,self.MAPFILEREQTAG)
