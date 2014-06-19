@@ -2,7 +2,7 @@
 # -*- coding: utf-8 -*-
 """
 mpimar (MPI Map Reduce Library), pronounced as /empima:r/
-
+https://github.com/junkimarui/mpimar
 """
 import boost.mpi as mpi
 import os
@@ -11,7 +11,10 @@ import glob
 import json
 
 class MapReduceJob(object):
-    #args = {"name":"NAME", "temp_dir":"TEMP_DIR", "mapper":0.5, "reducer":0.5, "out_file":"OUTPUT FILE", "allow_error_num":0}
+    __author__ = "Junki Marui"
+    __copyright__ = "Copyright (C) 2014 Junki Marui"
+    __license__ = "MIT License"
+    __version__ = "0.1"
     def __init__ (self,args):
         self.MAPINTAG = 1
         self.MAPOUTTAG = 2
