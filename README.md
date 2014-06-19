@@ -23,7 +23,7 @@ python run_single.py 5 3 inverted_index.py data/split.aa,data/split.ab,data/spli
 ```  
 If you set up MPI environment, you could use run.py instead.
 ```
-python run.py 5 3 hostfile inverted_index.py data/split.aa,data/split.ab,data/split.ac,data/split.ad,data/split.ae,data/split.af,data/split.ag,data/split.ah,data/split.ai,data/split.aj out.txt
+python run.py hostfile 5 3 inverted_index.py data/split.aa,data/split.ab,data/split.ac,data/split.ad,data/split.ae,data/split.af,data/split.ag,data/split.ah,data/split.ai,data/split.aj out.txt
 ```
 run.py sends required programs to the exact same directory on remote servers.
 
