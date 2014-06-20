@@ -10,6 +10,7 @@ import os.path
 import glob
 import json
 import random
+import sys
 
 class MapReduceJob(object):
     __author__ = "Junki Marui"
@@ -33,11 +34,14 @@ class MapReduceJob(object):
         self.temp_dir = args["temp_dir"] if args.has_key("temp_dir") else "/tmp"
         self.out_file = args["out_file"] if args.has_key("out_file") else self.name+".txt"
         self.allow_error_num = args["allow_error_num"] if args.has_key("allow_error_num") else 0
+        self.map_from_file = args["map_from_file"] if args.has_key("map_from_file") else 0
+        self.debug_ = args["debug"] if args.has_key("debug") else 0
         self.error_ = []
         self.emit_idx = 0 #for master
         childarray = range(1,mpi.size)
-        random.seed(1341) #to generate the same random variables
-        random.shuffle(childarray)
+        if args.has_key("node_shuffle") and args["node_shuffle"] == 1:
+            random.seed(1341) #to generate the same random variables
+            random.shuffle(childarray)
         self.mapper_array = childarray[:self.mapper_num]
         self.reducer_array = childarray[self.mapper_num:]
 
@@ -76,13 +80,13 @@ class MapReduceJob(object):
         
     def master(self):
         self.distribute()
-        print "distributed"
         #tells mappers to finish receiving data
         for mapper in self.mappers():
             mpi.world.send(mapper,self.MAPINTAG,"EOF")
+        if self.debug_ == 1: sys.stderr.write("map step\n")
         #receives file names from mappers
         files = {}
-        print "receiving"
+        if self.debug_ == 1: sys.stderr.write("")
         for mapper in self.mappers():
             f = mpi.world.recv(mapper,self.MAPOUTTAG)
             for rkey in f.keys():
@@ -90,17 +94,17 @@ class MapReduceJob(object):
                     files[rkey][str(mapper)] = f[rkey]
                 else:
                     files[rkey] = {str(mapper):f[rkey]}
-        print "sending"
+        if self.debug_ == 1: sys.stderr.write("master -> reducer\n")
         #sends file names to reducers
         for rkey in files.keys():
             mpi.world.send(int(rkey), self.REDINTAG, files[rkey])
-        print "requesting"
+        if self.debug_ == 1: sys.stderr.write("reducer -> master(file request)\n")
         #receives file request from reducers
         for reducer in self.reducers():
             fnames = mpi.world.recv(reducer,self.MAPFILEREQTAG)
             for mkey in fnames.keys():
                 mpi.world.send(int(mkey),self.MAPFILEREQTAG,(reducer,fnames[mkey]))
-
+        if self.debug_ == 1: sys.stderr.write("reduce step\n")
         #receives file names from reducers and concatinates them
         fout = open(self.out_file,"w")
         for reducer in self.reducers():
@@ -117,7 +121,7 @@ class MapReduceJob(object):
                 content = mpi.world.recv(reducer,self.REDFILETAG)
                 fout.write(content)
                 content = ""
-
+        if self.debug_ == 1: sys.stderr.write("shutting down\n")
         #shuts down mapper
         for mapper in self.mappers():
             mpi.world.send(mapper,self.MAPFILEREQTAG,"")
@@ -138,30 +142,43 @@ class MapReduceJob(object):
             except:
                 if not os.path.exists(self.temp_dir):
                     self.setError(self.temp_dir+" couldn't be created")
-        #receives data from master
-        fname_in = self.temp_dir+"/"+self.getID()+"map.txt"
-        fin = open(fname_in,"w")
-        msg = mpi.world.recv(0,self.MAPINTAG)
-        while msg != "EOF":
-            fin.write(msg+"\n")
-            msg = mpi.world.recv(0,self.MAPINTAG)
-        fin.close()
-        #map step (and shuffle at the same time)
-        ##open files
+        #open shuffled files for writing
         self.shuffled_files = {}
         filenames = {}
         for reducer in self.reducers():
             rkey = str(reducer)
             filenames[rkey] = self.temp_dir+"/"+self.getID()+"mr_"+rkey+".txt"
             self.shuffled_files[rkey] = open(filenames[rkey],"w")
-        line_num = 0
-        for line in open(fname_in,"r"):
-            try:
-                self.map(json.loads(line.rstrip()))
-            except Exception as inst:
-                self.setError(inst.args[0]+" at line "+ str(line_num))
-                self.checkErrorCount()
-            line_num += 1
+        
+        #receives data from master
+        fname_in = self.temp_dir+"/"+self.getID()+"map.txt"
+        if self.map_from_file == 1:
+            # received data stored in a file
+            fin = open(fname_in,"w")
+            msg = mpi.world.recv(0,self.MAPINTAG)
+            while msg != "EOF":
+                fin.write(msg+"\n")
+                msg = mpi.world.recv(0,self.MAPINTAG)
+            fin.close()
+            line_num = 0
+            for line in open(fname_in,"r"):
+                try:
+                    self.map(json.loads(line.rstrip()))
+                except Exception as inst:
+                    self.setError(inst.args[0]+" at line "+ str(line_num))
+                    self.checkErrorCount()
+                    line_num += 1
+        else:
+            #received data are not stored in a file
+            msg = mpi.world.recv(0,self.MAPINTAG)
+            while msg != "EOF":
+                try:
+                    self.map(json.loads(msg))
+                except Exception as inst:
+                    self.setError(inst.args[0])
+                    self.checkErrorCount()
+                msg = mpi.world.recv(0,self.MAPINTAG)
+        #finishes writing files
         for fobj in self.shuffled_files.values():
             fobj.close()
         #sorts shuffled files
@@ -230,19 +247,25 @@ class MapReduceJob(object):
                 if (not lines.has_key(fobj)) or (lines[fobj] == ""):
                     lines[fobj] = fobj.readline()
                     if lines[fobj]:
-                        lines[fobj] = json.loads(lines[fobj].rstrip())
+                        try:
+                            nextline = lines[fobj].rstrip()
+                            lines[fobj] = json.loads(nextline)
+                        except Exception as inst:
+                            lines[fobj] = ""
+                            self.setError(inst.args[0]+" during reading: "+nextline)
+                            self.checkErrorCount()
                     else:
                         #deletes if it's already read
-                        fobjs.remove(fobj)
                         del(lines[fobj])
             #if it finished reading all the files
-            if len(fobjs) == 0:
+            if len(lines.keys()) == 0:
                 break
             #takes the smallest string from next lines
             fmin = None
             kmin = ""
             vmin = ""
             for fobj in fobjs:
+                if not lines.has_key(fobj) or lines[fobj] == "": continue
                 row = lines[fobj]
                 if kmin == "" or row[0] < kmin:
                     kmin = row[0]
