@@ -8,9 +8,12 @@ import boost.mpi as mpi
 import os
 import os.path
 import glob
-import json
 import random
 import sys
+try:
+    import ujson as json
+except ImportError:
+    import json
 
 class MapReduceJob(object):
     __author__ = "Junki Marui"
@@ -206,7 +209,7 @@ class MapReduceJob(object):
                 try:
                     os.remove(fname)
                 except:
-                    self.setError(fname+" might not be deleted")
+                    if os.path.exists(fname): self.setError(fname+" might not be deleted")
         mpi.world.send(0,self.FINISHTAG,self.error_)
         
     def reducer(self):
@@ -305,7 +308,7 @@ class MapReduceJob(object):
                try:
                    os.remove(fname)
                except:
-                   self.setError(fname+" might not be deleted")
+                    if os.path.exists(fname):self.setError(fname+" might not be deleted")
         mpi.world.send(0,self.FINISHTAG,self.error_)
 
     def start(self):
