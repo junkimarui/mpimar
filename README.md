@@ -39,6 +39,7 @@ localhost cpu=4
 hostA cpu=4
 ...
 ```
+The first line should be `localhost` in order to locate the master worker in your local environment.
 
 Development Environment
 -----------
