@@ -33,6 +33,7 @@ class MapReduceJob(object):
 
         self.mapper_num = args["mapper"]
         self.reducer_num = args["reducer"]
+        self.spout_num = args["spout"] if args.has_key("spout") else 1
         self.name = args["name"] if args.has_key("name") else "job"
         self.temp_dir = args["temp_dir"] if args.has_key("temp_dir") else "/tmp"
         self.out_file = args["out_file"] if args.has_key("out_file") else self.name+".txt"
@@ -41,7 +42,9 @@ class MapReduceJob(object):
         self.debug_ = args["debug"] if args.has_key("debug") else 0
         self.error_ = []
         self.emit_idx = 0 #for master
-        childarray = range(1,mpi.size)
+        self.emit_reqs = mpi.RequestList()
+        self.spout_array = range(0,self.spout_num)
+        childarray = range(self.spout_num,mpi.size)
         if args.has_key("node_shuffle") and args["node_shuffle"] == 1:
             random.seed(1341) #to generate the same random variables
             random.shuffle(childarray)
@@ -49,22 +52,27 @@ class MapReduceJob(object):
         self.reducer_array = childarray[self.mapper_num:]
 
     #abstract methods
-    def distribute(self): print('implement distribute method')
+    def distribute(self,spout_idx): print('implement distribute method')
     def map(self,val): print('implement map method')
     def reduce(self,keyvals): print('implement reduce method')
 
     #utility methods
     def isMaster(self): return mpi.world.rank == 0
+    def isSpout(self): return mpi.world.rank in self.spouts()
     def isMapper(self): return mpi.world.rank in self.mappers()
     def isReducer(self): return mpi.world.rank in self.reducers()
+    def spouts(self): return self.spout_array
     def mappers(self): return self.mapper_array
     def reducers(self): return self.reducer_array
     def getID(self): return self.name + "_" + str(mpi.world.rank)
     def getReducerFromKey(self,key): return self.reducers()[hash(key) % self.reducer_num]
     def emit(self,obj):
-        if self.isMaster():
-            mpi.world.send(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj))
+        if self.isSpout():
+            self.emit_reqs.append(mpi.world.isend(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj)))
             self.emit_idx = (self.emit_idx + 1) % self.mapper_num
+            if self.emit_idx == 0:
+                mpi.wait_all(self.emit_reqs)
+                self.emit_reqs = mpi.RequestList()
         elif self.isMapper():
             self.shuffled_files[str(self.getReducerFromKey(obj[0]))].write(json.dumps(obj)+"\n")
         else:
@@ -80,16 +88,23 @@ class MapReduceJob(object):
         if self.allow_error_num < len(self.error_):
             raise Exception("\n".join(self.error_)+"\n"+
                             "Too many errors occured in "+self.getID()+"\n")
-        
-    def master(self):
-        self.distribute()
+    def spout(self):
+        self.distribute(mpi.world.rank)
+        if len(self.emit_reqs) > 0: mpi.wait_all(self.emit_reqs)
         #tells mappers to finish receiving data
         for mapper in self.mappers():
             mpi.world.send(mapper,self.MAPINTAG,"EOF")
-        if self.debug_ == 1: sys.stderr.write("map step\n")
+        if self.debug_ == 1: sys.stderr.write("data sent from spout:"+str(mpi.world.rank)+"\n")
+
+    def master(self):
+        self.distribute(mpi.world.rank)
+        if len(self.emit_reqs) > 0: mpi.wait_all(self.emit_reqs)
+        #tells mappers to finish receiving data
+        for mapper in self.mappers():
+            mpi.world.send(mapper,self.MAPINTAG,"EOF")
+        if self.debug_ == 1: sys.stderr.write("data sent from master\n")
         #receives file names from mappers
         files = {}
-        if self.debug_ == 1: sys.stderr.write("")
         for mapper in self.mappers():
             f = mpi.world.recv(mapper,self.MAPOUTTAG)
             for rkey in f.keys():
@@ -97,11 +112,11 @@ class MapReduceJob(object):
                     files[rkey][str(mapper)] = f[rkey]
                 else:
                     files[rkey] = {str(mapper):f[rkey]}
-        if self.debug_ == 1: sys.stderr.write("master -> reducer\n")
+        if self.debug_ == 1: sys.stderr.write("master -> reducer (file list)\n")
         #sends file names to reducers
         for rkey in files.keys():
             mpi.world.send(int(rkey), self.REDINTAG, files[rkey])
-        if self.debug_ == 1: sys.stderr.write("reducer -> master(file request)\n")
+        if self.debug_ == 1: sys.stderr.write("reducer -> master -> mapper(file request)\n")
         #receives file request from reducers
         for reducer in self.reducers():
             fnames = mpi.world.recv(reducer,self.MAPFILEREQTAG)
@@ -155,13 +170,20 @@ class MapReduceJob(object):
         
         #receives data from master
         fname_in = self.temp_dir+"/"+self.getID()+"map.txt"
+        valid_spouts = self.spouts()[:]
+        spout_idx = 0
         if self.map_from_file == 1:
             # received data stored in a file
             fin = open(fname_in,"w")
-            msg = mpi.world.recv(0,self.MAPINTAG)
-            while msg != "EOF":
-                fin.write(msg+"\n")
-                msg = mpi.world.recv(0,self.MAPINTAG)
+            while True:
+                source = valid_spouts[spout_idx]
+                msg = mpi.world.recv(source,self.MAPINTAG)
+                if msg != "EOF":
+                    fin.write(msg+"\n")
+                else:
+                    valid_spouts.remove(source)
+                    if len(valid_spouts) == 0: break
+                spout_idx = (spout_idx + 1) % len(valid_spouts)
             fin.close()
             line_num = 0
             for line in open(fname_in,"r"):
@@ -173,14 +195,19 @@ class MapReduceJob(object):
                     line_num += 1
         else:
             #received data are not stored in a file
-            msg = mpi.world.recv(0,self.MAPINTAG)
-            while msg != "EOF":
-                try:
-                    self.map(json.loads(msg))
-                except Exception as inst:
-                    self.setError(inst.args[0])
-                    self.checkErrorCount()
-                msg = mpi.world.recv(0,self.MAPINTAG)
+            while True:
+                source = valid_spouts[spout_idx]
+                msg = mpi.world.recv(source,self.MAPINTAG)
+                if msg != "EOF":
+                    try:
+                        self.map(json.loads(msg))
+                    except Exception as inst:
+                        self.setError(inst.args[0])
+                        self.checkErrorCount()
+                else:
+                    valid_spouts.remove(source)
+                    if len(valid_spouts) == 0: break
+                spout_idx = (spout_idx + 1) % len(valid_spouts)
         #finishes writing files
         for fobj in self.shuffled_files.values():
             fobj.close()
@@ -314,6 +341,8 @@ class MapReduceJob(object):
     def start(self):
         if self.isMaster():
             self.master()
+        elif self.isSpout():
+            self.spout()
         elif self.isMapper():
             self.mapper()
         else:

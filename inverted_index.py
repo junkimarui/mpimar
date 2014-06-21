@@ -6,19 +6,22 @@ import json
 from mpimar import MapReduceJob
 
 class InvertedIndexJob(MapReduceJob):
-    def __init__ (self,mapper_num,reducer_num,input_file,out_file):
+    def __init__ (self,spout_num,mapper_num,reducer_num,input_file,out_file):
         MapReduceJob.__init__(self,
                               {"name":"inverted_index",
                                "temp_dir":"/tmp",
                                "mapper":mapper_num,
                                "reducer":reducer_num,
+                               "spout":spout_num,
                                "out_file":out_file,
                                "map_from_file":0})
         self.input_files = input_file.split(",")
 
-    def distribute(self):
-        for input_file in self.input_files:
-            for line in codecs.open(input_file,'r',"utf_8"):
+    def distribute(self,spout_idx):
+        for file_idx in range(0,len(self.input_files)):
+            if file_idx % len(self.spouts()) != spout_idx: continue
+            input_file = self.input_files[file_idx]
+            for line in open(input_file,'r'):
                 line = line.rstrip()
                 self.emit((input_file,line))
     
@@ -42,21 +45,22 @@ class InvertedIndexJob(MapReduceJob):
 reload(sys)
 sys.setdefaultencoding('utf-8')
 argv = sys.argv
-if len(argv) < 5:
-    print "Usage: mpirun -np [number of process] python %s [mapper num] [reducer num] [file names] [out_file]" % argv[0]
+if len(argv) < 6:
+    print "Usage: mpirun -np [number of process] python %s [spout num] [mapper num] [reducer num] [file names] [out_file]" % argv[0]
     quit()
-job = InvertedIndexJob(int(argv[1]),int(argv[2]),argv[3],argv[4]+".json")
+out_file = argv[5]
+job = InvertedIndexJob(int(argv[1]),int(argv[2]),int(argv[3]),argv[4],out_file+".json")
 job.start()
 
 if job.isMaster():
     #convert from json
-    fout = codecs.open(argv[4],"w","utf_8")
-    for line in open(argv[4]+".json","r"):
+    fout = codecs.open(out_file,"w","utf_8")
+    for line in open(out_file+".json","r"):
         obj = json.loads(line.rstrip())
         tfs = []
         for fname in obj[1].keys():
             tfs.append(fname+" "+str(obj[1][fname]))
         fout.write(obj[0]+" "+" ".join(tfs)+"\n")
     #delete json file
-    os.remove(argv[4]+".json")
+    os.remove(out_file+".json")
 
