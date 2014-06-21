@@ -39,7 +39,8 @@ localhost cpu=4
 hostA cpu=4
 ...
 ```
-The first line should be `localhost` in order to locate the master worker in your local environment.
+The first line should be `localhost` in order to locate the master worker in your local environment.  
+If your files are located on localhost, you should specify larger cpu numbers of `localhost` than the number of spouts(=threads of data source).
 
 Development Environment
 -----------
