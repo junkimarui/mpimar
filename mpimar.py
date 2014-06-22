@@ -42,7 +42,6 @@ class MapReduceJob(object):
         self.debug_ = args["debug"] if args.has_key("debug") else 0
         self.error_ = []
         self.emit_idx = 0 #for master
-        self.emit_reqs = mpi.RequestList()
         self.spout_array = range(0,self.spout_num)
         childarray = range(self.spout_num,mpi.size)
         if args.has_key("node_shuffle") and args["node_shuffle"] == 1:
@@ -68,11 +67,8 @@ class MapReduceJob(object):
     def getReducerFromKey(self,key): return self.reducers()[hash(key) % self.reducer_num]
     def emit(self,obj):
         if self.isSpout():
-            self.emit_reqs.append(mpi.world.isend(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj)))
+            mpi.world.send(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj))
             self.emit_idx = (self.emit_idx + 1) % self.mapper_num
-            if self.emit_idx == 0:
-                mpi.wait_all(self.emit_reqs)
-                self.emit_reqs = mpi.RequestList()
         elif self.isMapper():
             self.shuffled_files[str(self.getReducerFromKey(obj[0]))].write(json.dumps(obj)+"\n")
         else:
@@ -90,18 +86,20 @@ class MapReduceJob(object):
                             "Too many errors occured in "+self.getID()+"\n")
     def spout(self):
         self.distribute(mpi.world.rank)
-        if len(self.emit_reqs) > 0: mpi.wait_all(self.emit_reqs)
         #tells mappers to finish receiving data
+        reqs = mpi.RequestList()
         for mapper in self.mappers():
-            mpi.world.send(mapper,self.MAPINTAG,"EOF")
+            reqs.append(mpi.world.isend(mapper,self.MAPINTAG,"EOF"))
+        mpi.wait_all(reqs)
         if self.debug_ == 1: sys.stderr.write("data sent from spout:"+str(mpi.world.rank)+"\n")
 
     def master(self):
         self.distribute(mpi.world.rank)
-        if len(self.emit_reqs) > 0: mpi.wait_all(self.emit_reqs)
         #tells mappers to finish receiving data
+        reqs = mpi.RequestList()
         for mapper in self.mappers():
-            mpi.world.send(mapper,self.MAPINTAG,"EOF")
+            reqs.append(mpi.world.isend(mapper,self.MAPINTAG,"EOF"))
+        mpi.wait_all(reqs)
         if self.debug_ == 1: sys.stderr.write("data sent from master\n")
         #receives file names from mappers
         files = {}
