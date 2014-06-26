@@ -32,6 +32,6 @@ for line in open(host_file,"r"):
         print cmd
         subprocess.call(cmd,shell=True)
 
-cmd = "mpirun --hostfile %s -np %d python %s %d %d %d %s" % (host_file,total_num,job,spout_num,mapper_num,reducer_num," ".join(argv))
+cmd = "mpirun -mca mpi_yield_when_idle 1 --hostfile %s -np %d python %s %d %d %d %s" % (host_file,total_num,job,spout_num,mapper_num,reducer_num," ".join(argv))
 print cmd 
 subprocess.call(cmd,shell=True)
