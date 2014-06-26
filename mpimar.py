@@ -280,7 +280,7 @@ class MapReduceJob(object):
                             lines[fobj] = json.loads(nextline)
                         except Exception as inst:
                             lines[fobj] = ""
-                            self.setError(inst.args[0]+" during reading: "+nextline)
+                            self.setError(str(type(inst))+str(inst.args[0])+" during reading: "+nextline)
                             self.checkErrorCount()
                     else:
                         #deletes if it's already read
@@ -307,7 +307,7 @@ class MapReduceJob(object):
                     try:
                         self.reduce((key_prev,vals))
                     except Exception as inst:
-                        self.setError(inst.args[0]+" during processing key = %s" % (key_prev))
+                        self.setError(str(type(inst))+str(inst.args[0])+" during processing key = %s" % (key_prev))
                         self.checkErrorCount()
                 key_prev = kmin
                 vals = [vmin]
@@ -317,7 +317,7 @@ class MapReduceJob(object):
             try:
                 self.reduce((key_prev,vals))
             except Exception as inst:
-                self.setError(inst.args[0]+" during processing key = %s" % (key_prev))
+                self.setError(str(type(inst))+str(inst.args[0])+" during processing key = %s" % (key_prev))
                 self.checkErrorCount()
         self.reducer_file.close()
         #sends result to master node
