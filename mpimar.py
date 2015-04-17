@@ -10,10 +10,13 @@ import os.path
 import glob
 import random
 import sys
+import time
 try:
     import ujson as json
 except ImportError:
     import json
+from operator import itemgetter
+import hashlib
 
 class MapReduceJob(object):
     __author__ = "Junki Marui"
@@ -30,6 +33,7 @@ class MapReduceJob(object):
         self.REDFILEREQTAG = 7
         self.REDFILETAG = 8
         self.FINISHTAG = 9
+        self.MAPREQTAG = 10
 
         self.mapper_num = args["mapper"]
         self.reducer_num = args["reducer"]
@@ -39,9 +43,12 @@ class MapReduceJob(object):
         self.out_file = args["out_file"] if args.has_key("out_file") else self.name+".txt"
         self.allow_error_num = args["allow_error_num"] if args.has_key("allow_error_num") else 0
         self.map_from_file = args["map_from_file"] if args.has_key("map_from_file") else 0
+        self.spout_emit_num = args["spout_emit_num"] if args.has_key("spout_emit_num") else 10000
+        self.spout_buffer = []
+        self.shuffled_line_max = args["shuffled_line_max"] if args.has_key("shuffled_line_max") else 1000000
+        self.reduced_line_max = args["reduced_line_max"] if args.has_key("reduced_line_max") else 100000
         self.debug_ = args["debug"] if args.has_key("debug") else 0
         self.error_ = []
-        self.emit_idx = 0 #for master
         self.spout_array = range(0,self.spout_num)
         childarray = range(self.spout_num,mpi.size)
         if args.has_key("node_shuffle") and args["node_shuffle"] == 1:
@@ -64,15 +71,36 @@ class MapReduceJob(object):
     def mappers(self): return self.mapper_array
     def reducers(self): return self.reducer_array
     def getID(self): return self.name + "_" + str(mpi.world.rank)
-    def getReducerFromKey(self,key): return self.reducers()[hash(key) % self.reducer_num]
+    def getReducerFromKey(self,key):
+        hash_val = int(hashlib.md5(key).hexdigest()[:16],16)
+        return self.reducers()[hash_val % self.reducer_num]
     def emit(self,obj):
         if self.isSpout():
-            mpi.world.send(self.mappers()[self.emit_idx],self.MAPINTAG,json.dumps(obj))
-            self.emit_idx = (self.emit_idx + 1) % self.mapper_num
+            self.spout_buffer.append(json.dumps(obj))
+            if len(self.spout_buffer) >= self.spout_emit_num:
+                self.sendFromSpout(self.MAPINTAG,self.spout_buffer)
+                self.spout_buffer = []
         elif self.isMapper():
-            self.shuffled_files[str(self.getReducerFromKey(obj[0]))].write(json.dumps(obj)+"\n")
+            rkey = str(self.getReducerFromKey(obj[0]))
+            if self.shuffled_lines[rkey] % self.shuffled_line_max == 0:
+                fname = self.temp_dir+"/"+self.getID()+"mr_"+rkey+"_"+str(self.shuffled_lines[rkey] // self.shuffled_line_max)+".txt"
+                self.shuffled_filenames[rkey].append(fname)
+                if self.shuffled_fobj.has_key(rkey):
+                    self.shuffled_fobj[rkey].close()
+                self.shuffled_fobj[rkey] = open(fname,"w")
+            self.shuffled_fobj[rkey].write(json.dumps(obj)+"\n")
+            self.shuffled_lines[rkey] += 1
         else:
             self.reducer_file.write(json.dumps(obj)+"\n")
+
+    def sendFromSpout(self,tag,obj_json):
+        status = mpi.world.iprobe(tag=self.MAPREQTAG)
+        while status is None:
+            time.sleep(0.01)
+            status = mpi.world.iprobe(tag=self.MAPREQTAG)
+        done_msg = mpi.world.recv(status.source,self.MAPREQTAG)
+        mpi.world.send(status.source,tag,obj_json)
+
     def setError(self,message):
         role = "reducer"
         if self.isMaster():
@@ -86,44 +114,65 @@ class MapReduceJob(object):
                             "Too many errors occured in "+self.getID()+"\n")
     def spout(self):
         self.distribute(mpi.world.rank)
+        self.sendFromSpout(self.MAPINTAG,self.spout_buffer) #send the rest
         #tells mappers to finish receiving data
         reqs = mpi.RequestList()
         for mapper in self.mappers():
+            done_msg = mpi.world.recv(mapper,self.MAPREQTAG)
             reqs.append(mpi.world.isend(mapper,self.MAPINTAG,"EOF"))
         mpi.wait_all(reqs)
         if self.debug_ == 1: sys.stderr.write("data sent from spout:"+str(mpi.world.rank)+"\n")
 
     def master(self):
         self.distribute(mpi.world.rank)
+        self.sendFromSpout(self.MAPINTAG,self.spout_buffer) #send the rest
         #tells mappers to finish receiving data
         reqs = mpi.RequestList()
         for mapper in self.mappers():
+            done_msg = mpi.world.recv(mapper,self.MAPREQTAG)
             reqs.append(mpi.world.isend(mapper,self.MAPINTAG,"EOF"))
         mpi.wait_all(reqs)
         if self.debug_ == 1: sys.stderr.write("data sent from master\n")
         #receives file names from mappers
         files = {}
-        for mapper in self.mappers():
+        mapnum_rest = len(self.mappers())
+        while mapnum_rest != 0:
+            status = mpi.world.iprobe(tag=self.MAPOUTTAG)
+            while status is None:
+                time.sleep(0.1)
+                status = mpi.world.iprobe(tag=self.MAPOUTTAG)
+            mapper = status.source
+            mapnum_rest -= 1
+            if self.debug_ == 1: sys.stderr.write("mapper %d -> master (shuffled file)\n" % mapper)
             f = mpi.world.recv(mapper,self.MAPOUTTAG)
             for rkey in f.keys():
                 if files.has_key(rkey):
                     files[rkey][str(mapper)] = f[rkey]
                 else:
                     files[rkey] = {str(mapper):f[rkey]}
-        if self.debug_ == 1: sys.stderr.write("master -> reducer (file list)\n")
         #sends file names to reducers
+        if self.debug_ == 1: sys.stderr.write("master -> reducer (file list)\n")
         for rkey in files.keys():
             mpi.world.send(int(rkey), self.REDINTAG, files[rkey])
-        if self.debug_ == 1: sys.stderr.write("reducer -> master -> mapper(file request)\n")
         #receives file request from reducers
+        if self.debug_ == 1: sys.stderr.write("reducer -> master -> mapper(file request)\n")
         for reducer in self.reducers():
             fnames = mpi.world.recv(reducer,self.MAPFILEREQTAG)
             for mkey in fnames.keys():
-                mpi.world.send(int(mkey),self.MAPFILEREQTAG,(reducer,fnames[mkey]))
+                for fname in fnames[mkey]:
+                    mpi.world.send(int(mkey),self.MAPFILEREQTAG,(reducer,fname))
         if self.debug_ == 1: sys.stderr.write("reduce step\n")
         #receives file names from reducers and concatinates them
         fout = open(self.out_file,"w")
-        for reducer in self.reducers():
+        rednum_rest = len(self.reducers())
+        while rednum_rest != 0:
+            status = mpi.world.iprobe(tag=self.REDOUTTAG)
+            while status is None:
+                time.sleep(0.1)
+                status = mpi.world.iprobe(tag=self.REDOUTTAG)
+            reducer = status.source
+            rednum_rest -= 1
+            if self.debug_ == 1: sys.stderr.write("reducer %d -> master (reduced data)\n" % reducer)
             fname = mpi.world.recv(reducer,self.REDOUTTAG)
             if os.path.exists(fname):
                 for line in open(fname,"r"):
@@ -135,8 +184,9 @@ class MapReduceJob(object):
             else:
                 mpi.world.send(reducer,self.REDFILEREQTAG,fname)
                 content = mpi.world.recv(reducer,self.REDFILETAG)
-                fout.write(content)
-                content = ""
+                while content != "":
+                    fout.write(content)
+                    content = mpi.world.recv(reducer,self.REDFILETAG)
         if self.debug_ == 1: sys.stderr.write("shutting down\n")
         #shuts down mapper
         for mapper in self.mappers():
@@ -159,25 +209,28 @@ class MapReduceJob(object):
                 if not os.path.exists(self.temp_dir):
                     self.setError(self.temp_dir+" couldn't be created")
         #open shuffled files for writing
-        self.shuffled_files = {}
-        filenames = {}
+        self.shuffled_fobj = {}
+        self.shuffled_lines = {}
+        self.shuffled_filenames = {}
         for reducer in self.reducers():
             rkey = str(reducer)
-            filenames[rkey] = self.temp_dir+"/"+self.getID()+"mr_"+rkey+".txt"
-            self.shuffled_files[rkey] = open(filenames[rkey],"w")
-        
+            self.shuffled_filenames[rkey] = []
+            self.shuffled_lines[rkey] = 0
         #receives data from master
         fname_in = self.temp_dir+"/"+self.getID()+"map.txt"
         valid_spouts = self.spouts()[:]
+        random.shuffle(valid_spouts) #decentralization
         spout_idx = 0
         if self.map_from_file == 1:
             # received data stored in a file
             fin = open(fname_in,"w")
             while True:
                 source = valid_spouts[spout_idx]
+                mpi.world.send(source,self.MAPREQTAG,"")
                 msg = mpi.world.recv(source,self.MAPINTAG)
                 if msg != "EOF":
-                    fin.write(msg+"\n")
+                    for line in msg:
+                        fin.write(line+"\n")
                 else:
                     valid_spouts.remove(source)
                     if len(valid_spouts) == 0: break
@@ -195,31 +248,39 @@ class MapReduceJob(object):
             #received data are not stored in a file
             while True:
                 source = valid_spouts[spout_idx]
+                mpi.world.send(source,self.MAPREQTAG,"")
                 msg = mpi.world.recv(source,self.MAPINTAG)
                 if msg != "EOF":
-                    try:
-                        self.map(json.loads(msg))
-                    except Exception as inst:
-                        self.setError(inst.args[0])
-                        self.checkErrorCount()
+                    for line in msg:
+                        try:
+                            self.map(json.loads(line))
+                        except Exception as inst:
+                            self.setError(inst.args[0])
+                            self.checkErrorCount()
                 else:
                     valid_spouts.remove(source)
                     if len(valid_spouts) == 0: break
                 spout_idx = (spout_idx + 1) % len(valid_spouts)
         #finishes writing files
-        for fobj in self.shuffled_files.values():
+        for fobj in self.shuffled_fobj.values():
             fobj.close()
         #sorts shuffled files
-        for fname in filenames.values():
-            data = []
-            for line in open(fname,"r"):
-                data.append(json.loads(line.rstrip()))
-            f = open(fname,"w")
-            for row in sorted(data):
-                f.write(json.dumps(row)+"\n")
-            f.close()
+        for rkey in self.shuffled_filenames.keys():
+            for fname in self.shuffled_filenames[rkey]:
+                data = []
+                for line in open(fname,"r"):
+                    try:
+                        data.append(json.loads(line.rstrip()))
+                    except Exception as inst:
+                        self.setError(inst.args[0])
+                        self.checkErrorCount()
+                f = open(fname,"w")
+                for row in sorted(data,key=itemgetter(0)):
+                    f.write(json.dumps(row)+"\n")
+                f.close()
+        data = None #frees memory
         #send file list to master node
-        mpi.world.send(0,self.MAPOUTTAG,filenames)
+        mpi.world.send(0,self.MAPOUTTAG,self.shuffled_filenames)
         #if a file is requested, send it to a reducer
         msg = mpi.world.recv(0,self.MAPFILEREQTAG)
         while msg != "":
@@ -227,9 +288,17 @@ class MapReduceJob(object):
             content = open(fname,"r").read()
             mpi.world.send(reducer,self.MAPFILETAG,content)
             content = ""
+            # to reduce probing during wait
+            status = mpi.world.iprobe(tag=self.MAPFILEREQTAG)
+            while status is None:
+                time.sleep(0.01)
+                status = mpi.world.iprobe(tag=self.MAPFILEREQTAG)
             msg = mpi.world.recv(0,self.MAPFILEREQTAG)
         #deletes temporary files
-        for fname in (filenames.values()+[fname_in]):
+        tempfiles = [fname_in]
+        for files in self.shuffled_filenames.values():
+            tempfiles += files
+        for fname in tempfiles:
             if os.path.exists(fname):
                 try:
                     os.remove(fname)
@@ -246,26 +315,35 @@ class MapReduceJob(object):
                 if not os.path.exists(self.temp_dir):
                     self.setError(self.temp_dir+ " couldn't be created")
         #receives file list
+        status = mpi.world.iprobe(tag=self.REDINTAG)
+        while status is None:
+            time.sleep(0.1)
+            status = mpi.world.iprobe(tag=self.REDINTAG)
         files = mpi.world.recv(0,self.REDINTAG)
         #copies file if it doesn't exist
         reqfiles = {}
         for mkey in files.keys():
-            if not os.path.exists(files[mkey]):
-                reqfiles[mkey] = files[mkey]
+            for fname in files[mkey]:
+                if not os.path.exists(fname):
+                    if not reqfiles.has_key(mkey):
+                        reqfiles[mkey] = []
+                    reqfiles[mkey].append(fname)
         mpi.world.send(0,self.MAPFILEREQTAG,reqfiles)
         for mkey in reqfiles.keys():
-            f = open(reqfiles[mkey],"w")
-            content = mpi.world.recv(int(mkey),self.MAPFILETAG)
-            f.write(content)
-            f.close()
+            for fname in reqfiles[mkey]:
+                f = open(fname,"w")
+                content = mpi.world.recv(int(mkey),self.MAPFILETAG)
+                f.write(content)
+                f.close()
         
         #outputs file
         fname_out = self.temp_dir+"/"+self.getID()+"_red.txt"
         self.reducer_file = open(fname_out,"w")
         #opens files
         fobjs = []
-        for mapper in files.keys():
-            fobjs.append(open(files[mapper],"r"))
+        for mkey in files.keys():
+            for fname in files[mkey]:
+                fobjs.append(open(fname,"r"))
         key_prev = ""
         vals = []
         lines = {}
@@ -323,12 +401,29 @@ class MapReduceJob(object):
         #sends result to master node
         mpi.world.send(0,self.REDOUTTAG,fname_out)
         msg = mpi.world.recv(0,self.REDFILEREQTAG)
-        while msg != "":
-            content = open(fname_out,"r").read()
-            mpi.world.send(0,self.REDFILETAG,content)
+        if msg != "":
+            content = ""
+            red_lines = 0
+            for line in open(fname_out,"r"):
+                content += line
+                red_lines += 1
+                if red_lines >= self.reduced_line_max:
+                    mpi.world.send(0,self.REDFILETAG,content)
+                    content = ""
+                    red_lines = 0
+            if content != "" : mpi.world.send(0,self.REDFILETAG,content)
+            mpi.world.send(0,self.REDFILETAG,"")
+            # to reduce probing during wait
+            status = mpi.world.iprobe(tag=self.REDFILEREQTAG)
+            while status is None:
+                time.sleep(0.1)
+                status = mpi.world.iprobe(tag=self.REDFILEREQTAG)
             msg = mpi.world.recv(0,self.REDFILEREQTAG)
         #deletes files
-        for fname in files.values()+[fname_out]:
+        tempfiles = [fname_out]
+        for fnames in files.values():
+            tempfiles += fnames
+        for fname in tempfiles:
            if os.path.exists(fname):
                try:
                    os.remove(fname)

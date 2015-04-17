@@ -14,7 +14,8 @@ class InvertedIndexJob(MapReduceJob):
                                "reducer":reducer_num,
                                "spout":spout_num,
                                "out_file":out_file,
-                               "map_from_file":0})
+                               "map_from_file":0,
+                               "debug":1})
         self.input_files = input_file.split(",")
 
     def distribute(self,spout_idx):
